@@ -1,0 +1,11 @@
+{
+    "hostname": "localhost",
+    "port": 3000,
+    "root": "/api",
+    "version": "0.5.0",
+    "environment": "development",
+    "path":"/geiger",
+    "authorize": "/oauth2/authorize",
+    "token": "/oauth2/token",
+    "admin": "/admin"
+}
