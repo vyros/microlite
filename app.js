@@ -5,7 +5,7 @@
 const bodyParser	= require('body-parser')
 const cookieParser	= require('cookie-parser')
 const compression	= require('compression')
-const config		= require('./config.json')
+const config		= require('./swagger.json')
 const cors			= require('cors')
 const express		= require('express')
 const app			= express()
@@ -17,7 +17,9 @@ const https			= require('https')
 const mongoose		= require('mongoose')
 const morgan		= require('morgan')
 const path 			= require('path')
-const winston		= require('winston');
+const swaggerUi		= require('swagger-ui-express')
+const swaggerJson	= require('./swagger.json')
+const winston		= require('winston')
 
 // Constants
 const hostname			= 'localhost'
@@ -28,8 +30,8 @@ const apiEnvironment	= 'dev'
 //const apiVersion		= `/v${apiTrueVersion.charAt(0)}`
 const apiVersion		= `/v1`
 const apiPath			= "/geiger"
-const apiAuthAuthorize	= "/oauth2/authorize"
-const apiAuthToken		= "/oauth2/token"
+const apiAuthAuthorize	= "/oauth/authorize"
+const apiAuthToken		= "/oauth/token"
 const apiTitle			= apiPath.split('/')[1].charAt(0).toUpperCase() + apiPath.split('/')[1].slice(1)
 const adminRoot			= "/admin"
 const timestamp			= Math.floor(Date.now() / 1000 / 60 / 60)
@@ -73,14 +75,11 @@ var options = {
 	useErrorHandler: false,
 	continueMiddleware: false,
 }
-app.oauth = new OAuth2Server({
-	model: {}, // See https://github.com/oauthjs/node-oauth2-server for specification
+const oauth = new OAuth2Server({
+	model: require('./models/oauth'), // See https://github.com/oauthjs/node-oauth2-server for specification
 	options: options,
 	allowBearerTokensInQueryString: true,
 	accessTokenLifetime: 4 * 60 * 60
-})
-app.oauth.authenticate((req, res, options) => {
-	console.log("Authenticate")
 })
 
 
@@ -90,7 +89,7 @@ app.use(bodyParser.urlencoded({ extended: true }))
 app.use(bodyParser.json())
 app.use(cookieParser())
 app.use(compression())
-app.use(morgan("dev")); // Log requests to the console
+app.use(morgan("dev")); // Funcy log requests to the console
 //app.enable('trust proxy')
 app.disable('x-powered-by')
 
@@ -127,15 +126,15 @@ var getFirstnameFromQueryRequest = (req) => {
 defaultRouter
 .get('/',  cors(), (req, res) => {
 	res.render('home', {
-		title: apiTitle,
+		title: swaggerJson.info.title,
 		firstname: getFirstnameFromQueryRequest(req)
 	})
 })
-.all('/secret', (req, _, next) => {
+.all('/secret', (req, res, next) => {
 	try {
 		logger.warn(`Accessing the secret section (${req.method})`)
 		let secret = req.headers.secret 
-		if (!secret || secret !== 'true') throw new Error(`Secret header is ${secret}`)
+		if (!secret || secret !== 'true') setStatusAndThrowError(res, 401, `Secret header is ${secret}`)
 	} catch (error) {
 		serverErrorHandler(error)
 	} finally {
@@ -183,7 +182,14 @@ var checkNoContent = (req, res, next) => {
 	if (Object.keys(req.body).length === 0) return res.status(204).send()
 	next()
 }
-
+var checkQuery = (req, _, next) => {
+	if (Object.keys(req.query).length !== 0) next('router')
+	next()
+}
+var setStatusAndThrowError = (res, code, message) => {
+	res.status(code)
+	throw new Error(message)
+}
 
 // API ROUTER
 // ==========
@@ -195,30 +201,34 @@ apiRouter
 	res.status(200).json({ version: apiTrueVersion })
 })
 
+// Swagger
+.use('/', swaggerUi.serve)
+.get('/swagger', swaggerUi.setup(swaggerJson))
+
 // Authentication
-.get(`${apiAuthAuthorize}`, (req, res) => {
+.get(`${apiAuthAuthorize}`, oauth.authorize(), (req, res) => {
 	var { authorization } = req.headers
-	if (!authorization) throw new Error('You must send an Authorization header')
+	if (!authorization) setStatusAndThrowError(res, 401, 'You must send an Authorization header')
 
 	var [authType, token] = authorization.trim().split(' ')
-	if (authType !== 'Bearer') throw new Error('Expected a Bearer token')
+	if (authType !== 'Bearer') setStatusAndThrowError(res, 401, 'Expected a Bearer token')
 
 	res.status(200).send()
 })
-.get(`${apiAuthToken}`, (_, res) => {
+.get(`${apiAuthToken}`, oauth.token(), (_, res) => {
 	res.status(200).json({ message: 'You got It!' })
 })
 
 // Main API routes
 .route(`${apiPath}`)
-	// .options((_, res) => {
+	// .options((req, res) => {
 	// 	res.set({
-	// 		'Access-Control-Allow-Origin': 'https://localhost/',
+	// 		'Access-Control-Allow-Origin': req.headers.origin,
 	// 		'Vary': 'Origin'
 	// 	})
 	// 	res.status(200).end()
 	// })
-	.get((_, res, next) => {
+	.get(checkQuery, (_, res, next) => {
 		Geiger.find({})
 		.then(entries => {
 			res.status(200).json(entries)
@@ -255,7 +265,7 @@ apiRouter
 	.get((req, res, next) => {
 		Geiger.findById(req.params.id)
 		.then(entry => {
-			if (!entry) return res.status(404).send() 
+			if (!entry) setStatusAndThrowError(res, 404, "Object Not Found")
 			res.status(200).json(entry)
 		})
 		.catch(err => {
@@ -268,7 +278,7 @@ apiRouter
 		Geiger
 		.findByIdAndUpdate(req.params.id, geiger)	
 		.then(entry => {
-			if (!entry) return res.status(404).send()
+			if (!entry) setStatusAndThrowError(res, 404, "Object Not Found")
 			res.status(200).send()
 		})
 		.catch(err => {
@@ -297,7 +307,7 @@ apiRouter
 		req.body._id = req.params.id
 		Geiger.findByIdAndDelete(req.params.id)
 		.then(entry => {
-			if (!entry) return res.status(404).send()
+			if (!entry) setStatusAndThrowError(res, 404, "Object Not Found")
 			res.status(200).send(`Bye bye ${(entry.title) ? entry.title : "object"}`)
 		})
 		.catch(err => {
@@ -308,10 +318,19 @@ apiRouter
 app.use(`${apiRoot}${apiVersion}`, apiRouter)
 
 
+// Geiger API (only GET /?)
+// ======================
+const apiGeiger	= express.Router()
+apiGeiger.get(`${apiPath}`, (req, res, next) =>{
+	setStatusAndThrowError(res, 418, "You send a fucking query")
+})
+app.use(`${apiRoot}${apiVersion}`, apiGeiger)
+
+
 // 404 HANDLER
 // ===========
 app.all('*', (_, res) => {
-	res.status(404).json({ message: "Not Found" })
+	setStatusAndThrowError(res, 501, "Method not found")
 })
 
 
@@ -325,7 +344,7 @@ var clientErrorHandler = (error) => {
 }
 app.use((err, req, res, next) => {
 	clientErrorHandler(err)
-	res.status(500).json({ message: err.message })
+	res.json({ message: err.message })
 })
 
 

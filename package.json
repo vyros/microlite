@@ -6,7 +6,7 @@
     "dev": "nodemon app.js"
   },
   "description": "Microlite API",
-  "author": "Jimmy Deweer",
+  "author": "Vyros",
   "license": "MIT",
   "dependencies": {
     "body-parser": "^1.19.0",
@@ -22,6 +22,7 @@
     "mongoose": "^5.5.14",
     "morgan": "^1.9.1",
     "path": "^0.12.7",
+    "swagger-ui-express": "^4.0.6",
     "winston": "^3.2.1"
   }
 }
